@@ -92,7 +92,7 @@ retrieveIPWeight k mymap = ipRangeWeight $ Map.findWithDefault [] k mymap
 
 isTuesday :: FilePath -> Bool
 isTuesday str = let 
-    dateStr = splitOn "." str !! 1
+    dateStr = splitOn "." (last (splitOn "/" str)) !! 1
     year  = read (take 4 dateStr) :: Integer
     month = read (take 2 (drop 4 dateStr)) :: Int
     day   = read (take 2 (drop 6 dateStr)) :: Int
@@ -115,7 +115,9 @@ main = do
         (month:year:xs) -> do
             allFilePaths        <- getFiles month year
             let acceptedFiles = takeSameDay . filter isTuesday . filter isBZ2File $ allFilePaths
-            putStrLn "Converting .bz2 inputs into maps"
+            putStrLn "BGP Files found:"
+            for_ acceptedFiles $ \file -> do
+                putStrLn file
             (rawASNMap, conMap) <- bimap unionsASNData unionsASConnections . unzip <$> forM acceptedFiles handleSingleFile
             putStrLn "Combining AS IP Ranges"
             pb1                 <- newProgressBar defStyle 10 (Progress 0 (length rawASNMap) ())
