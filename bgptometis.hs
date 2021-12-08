@@ -114,7 +114,7 @@ bgpDumpMonthYear month year = do
     putStrLn (show n ++ " nodes found")
     let m = length . concatMap Map.elems . Map.elems $ conMapFinal
     putStrLn (show m ++ " edges found")
-    let outputName = "2001.10"
+    let outputName = year ++ "." ++ month
     let outMetis   = outputName ++ "metis"
     let outNodemap = outputName ++ ".nodemap"
     let conMapLst = Map.toAscList conMapFinal
