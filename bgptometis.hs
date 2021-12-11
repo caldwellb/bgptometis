@@ -12,8 +12,9 @@ import qualified Data.Map as Map
 import Data.Int
 import Data.Char
 import System.ProgressBar
-import qualified Data.IntMap as T
+import Control.Applicative
 import System.Environment
+import System.FilePath
 default (T.Text)
 
 type ASN = Int32
@@ -54,26 +55,24 @@ isBZ2File str = last (splitOn "." str) == "bz2"
 
 isRIBSFile :: FilePath -> Bool
 isRIBSFile file = let
-    sections = splitOn "." file in
+    sections = splitOn "." (last (splitOn [pathSeparator] file))     in
     head sections == "rib" && all isDigit (sections !! 1) && all isDigit (sections !! 2) && sections !! 3 == "bz2"
 
-isTuesday :: FilePath -> Bool
-isTuesday str = let 
-    dateStr = splitOn "." (last $ splitOn "/" str) !! 1
+getDay :: FilePath -> DayOfWeek 
+getDay file = let
+    dateStr = splitOn "." (takeFileName file) !! 1
     year  = read (take 4 dateStr) 
     month = read (take 2 (drop 4 dateStr)) 
     day   = read (take 2 (drop 6 dateStr)) 
-    in
-        Tuesday == dayOfWeek (fromGregorian year month day)
+    in dayOfWeek (fromGregorian year month day)
 
-testLine :: T.Text
-testLine = "TABLE_DUMP|10/27/01 05:48:26|B|209.244.2.115|3356|3.0.0.0/8|3356 701 80|IGP"
+isTuesday :: FilePath -> Bool
+isTuesday file = getDay file == Tuesday
 
 takeSameDay :: [FilePath] -> [FilePath]
 takeSameDay []          = []
-takeSameDay (file:rest) = file:takeWhile isSameDay rest
-    where
-        isSameDay x = splitOn "." file !! 1 == splitOn "." x !! 1 
+takeSameDay (file:rest) = file:takeWhile ((getDay file ==) . getDay) rest
+
 
 combineIPRanges :: IPRanges -> IO IPRanges
 combineIPRanges ranges = --undefined
@@ -87,18 +86,30 @@ formatASConnections :: Map.Map ASN Int -> String
 formatASConnections asmap = unwords (map (\(x,y) -> show x ++ ' ':show y) (Map.toAscList asmap))
 
 getSubdirectories :: FilePath -> IO [FilePath]
-getSubdirectories = 
-    getDirectoryContents >=> (<>) <$> pure . filter (not . ((||) <$> (== ".") <*> (==".."))) <*> (filterM doesDirectoryExist >=> (concat <$>) . mapM getSubdirectories . filter (not . ((||) <$> (== ".") <*> (==".."))))
-
+getSubdirectories ofPath = let
+    handleCurrentDir = listDirectory ofPath >>= mapM makeAbsolute
+    handleRecursion = do
+        currentContents <- handleCurrentDir
+        currentDirs <- filterM doesDirectoryExist currentContents
+        concat <$> mapM (\x -> setCurrentDirectory x >> getSubdirectories x) currentDirs
+    in liftA2 (<>) handleCurrentDir handleRecursion
+    
 getRIBS :: IO [FilePath]
 getRIBS = filter isRIBSFile <$> (getCurrentDirectory >>= getSubdirectories)
 
+ribsMonthYear :: String -> String -> FilePath -> Bool
+ribsMonthYear month year file = take 6 (splitOn "." (takeFileName file) !! 1) == year ++ month
+
+firstTuesday :: String -> String -> [FilePath] -> [FilePath]
+firstTuesday month year = filter ((&&) <$> isTuesday <*> ribsMonthYear month year)
+
 bgpDumpMonthYear :: String -> String -> IO ()
 bgpDumpMonthYear month year = do
-    let fileQuals = takeSameDay . filter isTuesday
-    approvedFiles <- fileQuals <$> getRIBS
+    approvedFiles <- firstTuesday month year <$> getRIBS 
     when (null approvedFiles) (putStrLn "No files found.")
     guard (not $ null approvedFiles)
+    putStrLn "Files found:"
+    mapM_ putStrLn approvedFiles
     asnMap <- newIORef Map.empty
     conMap <- newIORef Map.empty
     forM_ approvedFiles $ \filename -> do 
@@ -143,5 +154,7 @@ main :: IO ()
 main = do
     args   <- getArgs
     case args of
+        [] -> do
+            putStrLn usage
         (month:year:xs) -> do
             bgpDumpMonthYear month year
