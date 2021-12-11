@@ -52,6 +52,11 @@ openBGPFile file =
 isBZ2File :: FilePath -> Bool
 isBZ2File str = last (splitOn "." str) == "bz2"
 
+isRIBSFile :: FilePath -> Bool
+isRIBSFile file = let
+    sections = splitOn "." file in
+    head sections == "rib" && all isDigit (sections !! 1) && all isDigit (sections !! 2) && sections !! 3 == "bz2"
+
 isTuesday :: FilePath -> Bool
 isTuesday str = let 
     dateStr = splitOn "." (last $ splitOn "/" str) !! 1
@@ -81,16 +86,19 @@ unionASConnections = Map.unionWith (Map.unionWith (+))
 formatASConnections :: Map.Map ASN Int -> String
 formatASConnections asmap = unwords (map (\(x,y) -> show x ++ ' ':show y) (Map.toAscList asmap))
 
-getFiles :: String -> String -> IO [FilePath]
-getFiles month year = 
-    getCurrentDirectory >>= \current -> 
-        map (\x -> current ++ '/':year ++ '.':month ++ "/RIBS/" ++ x) <$> 
-            getDirectoryContents (current ++ '/':year ++ '.':month ++ "/RIBS")
+getSubdirectories :: FilePath -> IO [FilePath]
+getSubdirectories = 
+    getDirectoryContents >=> (<>) <$> pure . filter (not . ((||) <$> (== ".") <*> (==".."))) <*> (filterM doesDirectoryExist >=> (concat <$>) . mapM getSubdirectories . filter (not . ((||) <$> (== ".") <*> (==".."))))
+
+getRIBS :: IO [FilePath]
+getRIBS = filter isRIBSFile <$> (getCurrentDirectory >>= getSubdirectories)
 
 bgpDumpMonthYear :: String -> String -> IO ()
 bgpDumpMonthYear month year = do
-    let fileQuals = takeSameDay . filter (\x -> isBZ2File x && isTuesday x)
-    approvedFiles <- fileQuals <$> getFiles month year
+    let fileQuals = takeSameDay . filter isTuesday
+    approvedFiles <- fileQuals <$> getRIBS
+    when (null approvedFiles) (putStrLn "No files found.")
+    guard (not $ null approvedFiles)
     asnMap <- newIORef Map.empty
     conMap <- newIORef Map.empty
     forM_ approvedFiles $ \filename -> do 
@@ -115,7 +123,7 @@ bgpDumpMonthYear month year = do
     let m = length . concatMap Map.elems . Map.elems $ conMapFinal
     putStrLn (show m ++ " edges found")
     let outputName = year ++ "." ++ month
-    let outMetis   = outputName ++ "metis"
+    let outMetis   = outputName ++ ".metis"
     let outNodemap = outputName ++ ".nodemap"
     let conMapLst = Map.toAscList conMapFinal
     let headerString = show n ++ ' ':show m ++ " 011"
