@@ -15,6 +15,7 @@ import System.ProgressBar
 import Control.Applicative
 import System.Environment
 import System.FilePath
+import Data.List
 default (T.Text)
 
 type ASN = Int32
@@ -105,7 +106,7 @@ firstTuesday month year = filter ((&&) <$> isTuesday <*> ribsMonthYear month yea
 
 bgpDumpMonthYear :: String -> String -> IO ()
 bgpDumpMonthYear month year = do
-    approvedFiles <- firstTuesday month year <$> getRIBS 
+    approvedFiles <- sort . firstTuesday month year <$> getRIBS 
     when (null approvedFiles) (putStrLn "No files found.")
     guard (not $ null approvedFiles)
     putStrLn "Files found:"
