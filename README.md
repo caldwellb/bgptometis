@@ -1,6 +1,6 @@
 **Usage**
 
-`bgptometis month year` recursively searches directories beneath you for `ribs.yyyymmdd.HHMM.bz2` files
+`bgptometis MM YYYY` recursively searches directories beneath you for `ribs.yyyymmdd.HHMM.bz2` files
 
 Requirements:
 
