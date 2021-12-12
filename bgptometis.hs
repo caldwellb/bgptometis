@@ -9,6 +9,7 @@ import Data.Time
 import Data.List.Split
 import Data.IORef
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import Data.Int
 import Data.Char
 import System.ProgressBar
@@ -22,12 +23,9 @@ type ASN = Int32
 type ASConnections = Map.Map ASN (Map.Map ASN Int)
 
 type IPRange  = T.Text
-type IPRanges = [IPRange]
+type IPRanges = Set.Set IPRange
 
 type ASNData = Map.Map Int IPRanges
-
-addASNToMap :: ASNData -> (ASN, IPRange) -> IO ASNData
-addASNToMap oldmap (key, val) = undefined
 
 parseLine :: T.Text -> ((ASN, T.Text), ASConnections)
 parseLine str = let
@@ -41,10 +39,10 @@ ipRangeToInt :: IPRange -> Int
 ipRangeToInt range = 2 ^ (32 - read (T.unpack (T.splitOn "/" range !! 1)) :: Int)
 
 ipRangeWeight :: IPRanges -> Int
-ipRangeWeight = sum . map ipRangeToInt
+ipRangeWeight = sum . Set.map ipRangeToInt
 
 retrieveIPWeight:: Ord k => k -> Map.Map k IPRanges -> Int
-retrieveIPWeight k mymap = ipRangeWeight $ Map.findWithDefault [] k mymap
+retrieveIPWeight k mymap = ipRangeWeight $ Map.findWithDefault Set.empty k mymap
 
 openBGPFile :: FilePath -> IO T.Text
 openBGPFile file = 
@@ -76,9 +74,9 @@ takeSameDay (file:rest) = file:takeWhile ((getDay file ==) . getDay) rest
 
 
 combineIPRanges :: IPRanges -> IO IPRanges
-combineIPRanges ranges = --undefined
-    let cmdArg = map (T.dropWhile isSpace) . T.lines <$> silently (run "netmask" ranges)
-        in shelly cmdArg
+combineIPRanges ranges = 
+    let cmdArg = map (T.dropWhile isSpace) . T.lines <$> silently (run "netmask" (Set.toList ranges))
+        in Set.fromList <$> shelly cmdArg
 
 unionASConnections :: ASConnections -> ASConnections -> ASConnections
 unionASConnections = Map.unionWith (Map.unionWith (+))
@@ -120,7 +118,7 @@ bgpDumpMonthYear month year = do
         pb <- newProgressBar defStyle 10 (Progress 0 (length filetext) ())
         forM_ filetext $ \line -> do
             let ((asn, ipdata), newConnections) = parseLine line
-            modifyIORef' asnMap (Map.insertWith (++) asn [ipdata])
+            modifyIORef' asnMap (Map.insertWith Set.union asn (Set.singleton ipdata))
             modifyIORef' conMap (unionASConnections newConnections)
             incProgress pb 1
         putStrLn "Squashing ipdata using netmask..."
