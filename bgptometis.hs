@@ -3,12 +3,13 @@
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 import Shelly
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
 import Control.Monad
 import System.Directory
-import Data.Time
+import Data.Time ( fromGregorian, dayOfWeek, DayOfWeek(Tuesday) )
 import Data.List.Split
 import Data.IORef
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Int
 import Data.Char
@@ -46,7 +47,7 @@ retrieveIPWeight k mymap = ipRangeWeight $ Map.findWithDefault Set.empty k mymap
 
 openBGPFile :: FilePath -> IO T.Text
 openBGPFile file = 
-    let cmdArg = silently $ cmd "bgpdump" ["-q", "-M", T.pack file]
+    let cmdArg = silently (cmd "bgpdump" ["-q", "-M", toTextIgnore file])
         in shelly cmdArg
 
 isBZ2File :: FilePath -> Bool
