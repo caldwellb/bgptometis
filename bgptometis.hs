@@ -97,7 +97,7 @@ getSubdirectories ofPath = let
     in liftA2 (<>) handleCurrentDir handleRecursion
     
 getRIBS :: IO [FilePath]
-getRIBS = filter isRIBSFile <$> (getCurrentDirectory >>= getSubdirectories)
+getRIBS = filter isRIBSFile <$> (getCurrentDirectory >>= \directory -> getSubdirectories directory <* setCurrentDirectory directory)
 
 ribsMonthYear :: String -> String -> FilePath -> Bool
 ribsMonthYear month year file = take 6 (splitOn "." (takeFileName file) !! 1) == year ++ month
