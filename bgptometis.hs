@@ -4,6 +4,7 @@
 import Shelly
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
+import qualified Data.Text.IO as TIO
 import Control.Monad
 import System.Directory
 import Data.Time ( fromGregorian, dayOfWeek, DayOfWeek(Tuesday) )
@@ -18,6 +19,7 @@ import Control.Applicative
 import System.Environment
 import System.FilePath
 import Data.List
+import Control.DeepSeq (force)
 default (T.Text)
 
 type ASN = Int32
@@ -26,7 +28,7 @@ type ASConnections = Map.Map ASN (Map.Map ASN Int)
 type IPRange  = T.Text
 type IPRanges = Set.Set IPRange
 
-type ASNData = Map.Map Int IPRanges
+type ASNData = Map.Map ASN IPRanges
 
 parseLine :: T.Text -> ((ASN, T.Text), ASConnections)
 parseLine str = let
@@ -80,7 +82,7 @@ combineIPRanges ranges =
         in Set.fromList <$> shelly cmdArg
 
 unionASConnections :: ASConnections -> ASConnections -> ASConnections
-unionASConnections = Map.unionWith (Map.unionWith (+))
+unionASConnections = Map.unionWith (Map.unionWith (force (+)))
 
 formatASConnections :: Map.Map ASN Int -> String
 formatASConnections asmap = unwords (map (\(x,y) -> show x ++ ' ':show y) (Map.toAscList asmap))
@@ -103,49 +105,73 @@ ribsMonthYear month year file = take 6 (splitOn "." (takeFileName file) !! 1) ==
 firstTuesday :: String -> String -> [FilePath] -> [FilePath]
 firstTuesday month year = filter ((&&) <$> isTuesday <*> ribsMonthYear month year)
 
+processOneFile :: IORef ASNData -> IORef ASConnections -> [T.Text] -> IO ()
+processOneFile asnMap conMap filetext = do
+    pb <- newProgressBar defStyle 10 (Progress 0 (length filetext) ())
+    forM_ filetext $ \line -> do
+        let ((asn, ipdata), newConnections) = parseLine line
+        modifyIORef' asnMap (Map.insertWith Set.union asn (Set.singleton ipdata))
+        modifyIORef' conMap (unionASConnections newConnections)
+        incProgress pb 1
+
+
+processApproved :: IORef ASNData -> IORef ASConnections -> FilePath -> IO ()
+processApproved asnMap conMap filename = do 
+    putStrLn ("Opening BGP file " ++ filename ++ " using bgpdump")
+    filetext <- T.lines <$> openBGPFile filename
+    putStr "Convering file " >> putStr filename >> putStrLn " to map" 
+    processOneFile asnMap conMap filetext
+    putStrLn "Squashing ipdata using netmask..."
+    rawASNMap <- readIORef asnMap
+    pb <- newProgressBar defStyle 10 (Progress 0 (Map.size rawASNMap) ())
+    combinedASN <- mapM (combineIPRanges >=> (\x -> incProgress pb 1 >> return x)) rawASNMap
+    writeIORef asnMap combinedASN
+
+test :: FilePath -> IO ()
+test filepath = do
+    asnMap <- newIORef Map.empty
+    conMap <- newIORef Map.empty
+    input  <- T.lines <$> TIO.readFile filepath
+    processOneFile asnMap conMap input
+    conMapFinal <- readIORef conMap
+    asnMapFinal <- readIORef asnMap 
+    outputFile asnMapFinal conMapFinal "12" "2035"
+    return ()
+    
+
+outputFile :: ASNData -> ASConnections -> String -> String -> IO ()
+outputFile asnMapFinal conMapFinal month year = do
+    let n            = length . Map.keys  $ conMapFinal
+        m            = length . concatMap Map.elems . Map.elems $ conMapFinal
+        outputName   = year ++ "." ++ month
+        outMetis     = outputName ++ ".metis"
+        outNodemap   = outputName ++ ".nodemap"
+        conMapLst    = Map.toAscList conMapFinal
+        headerString = show n ++ ' ':show m ++ " 011\n"
+    putStrLn (show n ++ " nodes found")
+    putStrLn (show m ++ " edges found")
+    writeFile outMetis headerString
+    writeFile outNodemap ""
+    putStrLn "Writing output"
+    pb <- newProgressBar defStyle 10 (Progress 0 (length conMapLst) ())
+    forM_ conMapLst $ \(asnNum, conweights) -> do
+        appendFile outMetis (show (retrieveIPWeight asnNum asnMapFinal) ++ " " ++ formatASConnections conweights ++ "\n")
+        appendFile outNodemap $ show asnNum ++ "\n"
+        incProgress pb 1
+
 bgpDumpMonthYear :: String -> String -> IO ()
 bgpDumpMonthYear month year = do
-    approvedFiles <- sort . firstTuesday month year <$> getRIBS 
+    approvedFiles <- take 1 . firstTuesday month year <$> getRIBS 
     when (null approvedFiles) (putStrLn "No files found.")
     guard (not $ null approvedFiles)
     putStrLn "Files found:"
     mapM_ putStrLn approvedFiles
     asnMap <- newIORef Map.empty
     conMap <- newIORef Map.empty
-    forM_ approvedFiles $ \filename -> do 
-        putStrLn ("Opening BGP file " ++ filename ++ " using bgpdump")
-        filetext <- T.lines <$> openBGPFile filename
-        putStr "Convering file " >> putStr filename >> putStrLn " to map" 
-        pb <- newProgressBar defStyle 10 (Progress 0 (length filetext) ())
-        forM_ filetext $ \line -> do
-            let ((asn, ipdata), newConnections) = parseLine line
-            modifyIORef' asnMap (Map.insertWith Set.union asn (Set.singleton ipdata))
-            modifyIORef' conMap (unionASConnections newConnections)
-            incProgress pb 1
-        putStrLn "Squashing ipdata using netmask..."
-        rawASNMap <- readIORef asnMap
-        pb <- newProgressBar defStyle 10 (Progress 0 (Map.size rawASNMap) ())
-        combinedASN <- mapM (combineIPRanges >=> (\x -> incProgress pb 1 >> return x)) rawASNMap
-        writeIORef asnMap combinedASN
+    forM_ approvedFiles (processApproved asnMap conMap)
     conMapFinal <- readIORef conMap
     asnMapFinal <- readIORef asnMap 
-    let n = length . Map.keys  $ conMapFinal
-    putStrLn (show n ++ " nodes found")
-    let m = length . concatMap Map.elems . Map.elems $ conMapFinal
-    putStrLn (show m ++ " edges found")
-    let outputName = year ++ "." ++ month
-    let outMetis   = outputName ++ ".metis"
-    let outNodemap = outputName ++ ".nodemap"
-    let conMapLst = Map.toAscList conMapFinal
-    let headerString = show n ++ ' ':show m ++ " 011"
-    writeFile outMetis   headerString
-    writeFile outNodemap ""
-    putStrLn "Writing output"
-    pb <- newProgressBar defStyle 10 (Progress 0 (length conMapLst) ())
-    forM_ conMapLst $ \(asnNum, asnweights) -> do
-        appendFile outMetis ('\n':show (retrieveIPWeight asnNum asnMapFinal)  ++ formatASConnections asnweights)
-        appendFile outNodemap $ show asnNum ++ "\n"
-        incProgress pb 1
+    outputFile asnMapFinal conMapFinal month year
 
 usage :: String
 usage = "bgptometis month year while in the bgpdata file, currently does not recursively search for files."
