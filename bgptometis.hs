@@ -161,7 +161,7 @@ outputFile asnMapFinal conMapFinal month year = do
 
 bgpDumpMonthYear :: String -> String -> IO ()
 bgpDumpMonthYear month year = do
-    approvedFiles <- take 1 . firstTuesday month year <$> getRIBS 
+    approvedFiles <- firstTuesday month year <$> getRIBS 
     when (null approvedFiles) (putStrLn "No files found.")
     guard (not $ null approvedFiles)
     putStrLn "Files found:"
